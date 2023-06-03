@@ -115,8 +115,9 @@ public static class Program
                 {
                     Id = featureId,
                     Coordinates = (totalCoordinateCount, new List<Coordinate>()),
-                    PropertyKeys = (totalPropertyCount, new List<string>(way.Tags.Count)),
-                    PropertyValues = (totalPropertyCount, new List<string>(way.Tags.Count))
+
+                    //folosesc dictionar pentru a optimiza
+                    PropertyDictionary = (totalPropertyCount, new Dictionary<string, string>(way.Tags.Count)),
                 };
 
                 var geometryType = GeometryType.Polyline;
@@ -126,10 +127,9 @@ public static class Program
                 {
                     if (tag.Key == "name")
                     {
-                        labels[^1] = totalPropertyCount * 2 + featureData.PropertyKeys.keys.Count * 2 + 1;
+                        labels[^1] = totalPropertyCount * 2 + featureData.PropertyDictionary.property.Count * 2 + 1;
                     }
-                    featureData.PropertyKeys.keys.Add(tag.Key);
-                    featureData.PropertyValues.values.Add(tag.Value);
+                    featureData.PropertyDictionary.property.Add(tag.Key, tag.Value);
                 }
 
                 foreach (var nodeId in way.NodeIds)
@@ -144,10 +144,9 @@ public static class Program
 
                     foreach (var (key, value) in node.Tags)
                     {
-                        if (!featureData.PropertyKeys.keys.Contains(key))
+                        if (!featureData.PropertyDictionary.property.ContainsKey(key))
                         {
-                            featureData.PropertyKeys.keys.Add(key);
-                            featureData.PropertyValues.values.Add(value);
+                            featureData.PropertyDictionary.property.Add(key, value);
                         }
                     }
 
@@ -168,10 +167,10 @@ public static class Program
                 }
                 featureData.GeometryType = (byte)geometryType;
 
-                totalPropertyCount += featureData.PropertyKeys.keys.Count;
+                totalPropertyCount += featureData.PropertyDictionary.property.Count;
                 totalCoordinateCount += featureData.Coordinates.coordinates.Count;
 
-                if (featureData.PropertyKeys.keys.Count != featureData.PropertyValues.values.Count)
+                if (featureData.PropertyDictionary.property.Keys.Count != featureData.PropertyDictionary.property.Values.Count)
                 {
                     throw new InvalidDataContractException("Property keys and values should have the same count");
                 }
@@ -189,8 +188,7 @@ public static class Program
 
                 var featureId = Interlocked.Increment(ref featureIdCounter);
 
-                var featurePropKeys = new List<string>();
-                var featurePropValues = new List<string>();
+                var featurePropDictionary = new Dictionary<string, string>();
 
                 labels.Add(-1);
                 for (var i = 0; i < node.Tags.Count; ++i)
@@ -198,159 +196,159 @@ public static class Program
                     var tag = node.Tags[i];
                     if (tag.Key == "name")
                     {
-                        labels[^1] = totalPropertyCount * 2 + featurePropKeys.Count * 2 + 1;
+                        labels[^1] = totalPropertyCount * 2 + featurePropDictionary.Count * 2 + 1;
+                    }
+                    if (!featurePropDictionary.ContainsKey(tag.Key))
+                    {
+                        featurePropDictionary.Add(tag.Key, tag.Value);
                     }
 
-                    featurePropKeys.Add(tag.Key);
-                    featurePropValues.Add(tag.Value);
+                    if (featurePropDictionary.Keys.Count != featurePropDictionary.Values.Count)
+                    {
+                        throw new InvalidDataContractException("Property keys and values should have the same count");
+                    }
                 }
-
-                if (featurePropKeys.Count != featurePropValues.Count)
-                {
-                    throw new InvalidDataContractException("Property keys and values should have the same count");
-                }
-
-                var fData = new FeatureData
-                {
-                    Id = featureId,
-                    GeometryType = (byte)GeometryType.Point,
-                    Coordinates = (totalCoordinateCount, new List<Coordinate>
+                    var fData = new FeatureData
+                    {
+                        Id = featureId,
+                        GeometryType = (byte)GeometryType.Point,
+                        Coordinates = (totalCoordinateCount, new List<Coordinate>
                     {
                         new Coordinate(node.Latitude, node.Longitude)
                     }),
-                    PropertyKeys = (totalPropertyCount, featurePropKeys),
-                    PropertyValues = (totalPropertyCount, featurePropValues)
-                };
-                featuresData.Add(featureId, fData);
-                featureIds.Add(featureId);
+                        PropertyDictionary = (totalPropertyCount, featurePropDictionary),
+                    };
+                    featuresData.Add(featureId, fData);
+                    featureIds.Add(featureId);
 
-                totalPropertyCount += featurePropKeys.Count;
-                ++totalCoordinateCount;
-            }
-
-            offsets.Add(tileId, fileWriter.BaseStream.Position);
-
-            // Write TileBlockHeader
-            fileWriter.Write(featureIds.Count); // TileBlockHeader: FeatureCount
-            fileWriter.Write(totalCoordinateCount); // TileBlockHeader: CoordinateCount
-            fileWriter.Write(totalPropertyCount * 2); // TileBlockHeader: StringCount
-            fileWriter.Write(0); //TileBlockHeader: CharactersCount
-
-            // Take note of the offset within the file for this field
-            var coPosition = fileWriter.BaseStream.Position;
-            // Write a placeholder value to reserve space in the file
-            fileWriter.Write((long)0); // TileBlockHeader: CoordinatesOffsetInBytes (placeholder)
-
-            // Take note of the offset within the file for this field
-            var soPosition = fileWriter.BaseStream.Position;
-            // Write a placeholder value to reserve space in the file
-            fileWriter.Write((long)0); // TileBlockHeader: StringsOffsetInBytes (placeholder)
-
-            // Take note of the offset within the file for this field
-            var choPosition = fileWriter.BaseStream.Position;
-            // Write a placeholder value to reserve space in the file
-            fileWriter.Write((long)0); // TileBlockHeader: CharactersOffsetInBytes (placeholder)
-
-            // Write MapFeatures
-            for (var i = 0; i < featureIds.Count; ++i)
-            {
-                var featureData = featuresData[featureIds[i]];
-
-                fileWriter.Write(featureIds[i]); // MapFeature: Id
-                fileWriter.Write(labels[i]); // MapFeature: LabelOffset
-                fileWriter.Write(featureData.GeometryType); // MapFeature: GeometryType
-                fileWriter.Write(featureData.Coordinates.offset); // MapFeature: CoordinateOffset
-                fileWriter.Write(featureData.Coordinates.coordinates.Count); // MapFeature: CoordinateCount
-                fileWriter.Write(featureData.PropertyKeys.offset * 2); // MapFeature: PropertiesOffset 
-                fileWriter.Write(featureData.PropertyKeys.keys.Count); // MapFeature: PropertyCount
-            }
-
-            // Record the current position in the stream
-            var currentPosition = fileWriter.BaseStream.Position;
-            // Seek back in the file to the position of the field
-            fileWriter.BaseStream.Position = coPosition;
-            // Write the recorded 'currentPosition'
-            fileWriter.Write(currentPosition); // TileBlockHeader: CoordinatesOffsetInBytes
-            // And seek forward to continue updating the file
-            fileWriter.BaseStream.Position = currentPosition;
-            foreach (var t in featureIds)
-            {
-                var featureData = featuresData[t];
-
-                foreach (var c in featureData.Coordinates.coordinates)
-                {
-                    fileWriter.Write(c.Latitude); // Coordinate: Latitude
-                    fileWriter.Write(c.Longitude); // Coordinate: Longitude
+                    totalPropertyCount += featurePropDictionary.Count;
+                    ++totalCoordinateCount;
                 }
-            }
 
-            // Record the current position in the stream
-            currentPosition = fileWriter.BaseStream.Position;
-            // Seek back in the file to the position of the field
-            fileWriter.BaseStream.Position = soPosition;
-            // Write the recorded 'currentPosition'
-            fileWriter.Write(currentPosition); // TileBlockHeader: StringsOffsetInBytes
-            // And seek forward to continue updating the file
-            fileWriter.BaseStream.Position = currentPosition;
+                offsets.Add(tileId, fileWriter.BaseStream.Position);
 
-            var stringOffset = 0;
-            foreach (var t in featureIds)
-            {
-                var featureData = featuresData[t];
-                for (var i = 0; i < featureData.PropertyKeys.keys.Count; ++i)
+                // Write TileBlockHeader
+                fileWriter.Write(featureIds.Count); // TileBlockHeader: FeatureCount
+                fileWriter.Write(totalCoordinateCount); // TileBlockHeader: CoordinateCount
+                fileWriter.Write(totalPropertyCount * 2); // TileBlockHeader: StringCount
+                fileWriter.Write(0); //TileBlockHeader: CharactersCount
+
+                // Take note of the offset within the file for this field
+                var coPosition = fileWriter.BaseStream.Position;
+                // Write a placeholder value to reserve space in the file
+                fileWriter.Write((long)0); // TileBlockHeader: CoordinatesOffsetInBytes (placeholder)
+
+                // Take note of the offset within the file for this field
+                var soPosition = fileWriter.BaseStream.Position;
+                // Write a placeholder value to reserve space in the file
+                fileWriter.Write((long)0); // TileBlockHeader: StringsOffsetInBytes (placeholder)
+
+                // Take note of the offset within the file for this field
+                var choPosition = fileWriter.BaseStream.Position;
+                // Write a placeholder value to reserve space in the file
+                fileWriter.Write((long)0); // TileBlockHeader: CharactersOffsetInBytes (placeholder)
+
+                // Write MapFeatures
+                for (var i = 0; i < featureIds.Count; ++i)
                 {
-                    ReadOnlySpan<char> k = featureData.PropertyKeys.keys[i];
-                    ReadOnlySpan<char> v = featureData.PropertyValues.values[i];
+                    var featureData = featuresData[featureIds[i]];
 
-                    fileWriter.Write(stringOffset); // StringEntry: Offset
-                    fileWriter.Write(k.Length); // StringEntry: Length
-                    stringOffset += k.Length;
-
-                    fileWriter.Write(stringOffset); // StringEntry: Offset
-                    fileWriter.Write(v.Length); // StringEntry: Length
-                    stringOffset += v.Length;
+                    fileWriter.Write(featureIds[i]); // MapFeature: Id
+                    fileWriter.Write(labels[i]); // MapFeature: LabelOffset
+                    fileWriter.Write(featureData.GeometryType); // MapFeature: GeometryType
+                    fileWriter.Write(featureData.Coordinates.offset); // MapFeature: CoordinateOffset
+                    fileWriter.Write(featureData.Coordinates.coordinates.Count); // MapFeature: CoordinateCount
+                    fileWriter.Write(featureData.PropertyDictionary.offset * 2); // MapFeature: PropertiesOffset 
+                    fileWriter.Write(featureData.PropertyDictionary.property.Count); // MapFeature: PropertyCount
                 }
-            }
 
-            // Record the current position in the stream
-            currentPosition = fileWriter.BaseStream.Position;
-            // Seek back in the file to the position of the field
-            fileWriter.BaseStream.Position = choPosition;
-            // Write the recorded 'currentPosition'
-            fileWriter.Write(currentPosition); // TileBlockHeader: CharactersOffsetInBytes
-            // And seek forward to continue updating the file
-            fileWriter.BaseStream.Position = currentPosition;
-            foreach (var t in featureIds)
-            {
-                var featureData = featuresData[t];
-                for (var i = 0; i < featureData.PropertyKeys.keys.Count; ++i)
+                // Record the current position in the stream
+                var currentPosition = fileWriter.BaseStream.Position;
+                // Seek back in the file to the position of the field
+                fileWriter.BaseStream.Position = coPosition;
+                // Write the recorded 'currentPosition'
+                fileWriter.Write(currentPosition); // TileBlockHeader: CoordinatesOffsetInBytes
+                                                   // And seek forward to continue updating the file
+                fileWriter.BaseStream.Position = currentPosition;
+                foreach (var t in featureIds)
                 {
-                    ReadOnlySpan<char> k = featureData.PropertyKeys.keys[i];
-                    foreach (var c in k)
-                    {
-                        fileWriter.Write((short)c);
-                    }
+                    var featureData = featuresData[t];
 
-                    ReadOnlySpan<char> v = featureData.PropertyValues.values[i];
-                    foreach (var c in v)
+                    foreach (var c in featureData.Coordinates.coordinates)
                     {
-                        fileWriter.Write((short)c);
+                        fileWriter.Write(c.Latitude); // Coordinate: Latitude
+                        fileWriter.Write(c.Longitude); // Coordinate: Longitude
                     }
                 }
+
+                // Record the current position in the stream
+                currentPosition = fileWriter.BaseStream.Position;
+                // Seek back in the file to the position of the field
+                fileWriter.BaseStream.Position = soPosition;
+                // Write the recorded 'currentPosition'
+                fileWriter.Write(currentPosition); // TileBlockHeader: StringsOffsetInBytes
+                                                   // And seek forward to continue updating the file
+                fileWriter.BaseStream.Position = currentPosition;
+
+                var stringOffset = 0;
+                foreach (var t in featureIds)
+                {
+                    var featureData = featuresData[t];
+                    foreach (var (key, value) in featureData.PropertyDictionary.property)
+                    {
+                        ReadOnlySpan<char> k = key;
+                        ReadOnlySpan<char> v = value;
+
+                        fileWriter.Write(stringOffset); // StringEntry: Offset
+                        fileWriter.Write(key.Length); // StringEntry: Length
+                        stringOffset += key.Length;
+
+                        fileWriter.Write(stringOffset); // StringEntry: Offset
+                        fileWriter.Write(value.Length); // StringEntry: Length
+                        stringOffset += value.Length;
+                    }
+                }
+
+                // Record the current position in the stream
+                currentPosition = fileWriter.BaseStream.Position;
+                // Seek back in the file to the position of the field
+                fileWriter.BaseStream.Position = choPosition;
+                // Write the recorded 'currentPosition'
+                fileWriter.Write(currentPosition); // TileBlockHeader: CharactersOffsetInBytes
+                                                   // And seek forward to continue updating the file
+                fileWriter.BaseStream.Position = currentPosition;
+                foreach (var t in featureIds)
+                {
+                    var featureData = featuresData[t];
+                    foreach (var (key, value) in featureData.PropertyDictionary.property)
+                    {
+                        ReadOnlySpan<char> k = key;
+                        foreach (var c in k)
+                        {
+                            fileWriter.Write((short)c);
+                        }
+
+                        ReadOnlySpan<char> v = value;
+                        foreach (var c in v)
+                        {
+                            fileWriter.Write((short)c);
+                        }
+                    }
+                }
             }
+
+            // Seek to the beginning of the file, just before the first TileHeaderEntry
+            fileWriter.Seek(Marshal.SizeOf<FileHeader>(), SeekOrigin.Begin);
+            foreach (var (tileId, offset) in offsets)
+            {
+                fileWriter.Write(tileId);
+                fileWriter.Write(offset);
+            }
+
+            fileWriter.Flush();
         }
-
-        // Seek to the beginning of the file, just before the first TileHeaderEntry
-        fileWriter.Seek(Marshal.SizeOf<FileHeader>(), SeekOrigin.Begin);
-        foreach (var (tileId, offset) in offsets)
-        {
-            fileWriter.Write(tileId);
-            fileWriter.Write(offset);
-        }
-
-        fileWriter.Flush();
-    }
-
+    
+    
     public static void Main(string[] args)
     {
         Options? arguments = null;
@@ -388,7 +386,6 @@ public static class Program
 
         public byte GeometryType { get; set; }
         public (int offset, List<Coordinate> coordinates) Coordinates { get; init; }
-        public (int offset, List<string> keys) PropertyKeys { get; init; }
-        public (int offset, List<string> values) PropertyValues { get; init; }
+        public (int offset, Dictionary<string, string> property) PropertyDictionary { get; init; }
     }
 }
